@@ -41,7 +41,7 @@ class VirtualMethod(object):
         self.name_modified = False
         self.tinfo_modified = False
 
-        self.base_address = idc.LocByName(self.name)
+        self.base_address = idc.get_name_ea_simple(self.name)
         if self.base_address != idaapi.BADADDR:
             self.base_address -= idaapi.get_imagebase()
 

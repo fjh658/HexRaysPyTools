@@ -26,7 +26,7 @@ def init_imported_ea(*args):
     for i in xrange(0, nimps):
         name = idaapi.get_import_module_name(i)
         if not name:
-            print "[Warning] Failed to get import module name for #%d" % i
+            print "[warning] Failed to get import module name for #%d" % i
             continue
 
         # print "Walking-> %s" % name
@@ -40,7 +40,7 @@ def is_imported_ea(ea):
 
 def is_code_ea(ea):
     flags = idaapi.getFlags(ea)  # flags_t
-    return idaapi.isCode(flags)
+    return idaapi.is_code(flags)
 
 
 def init_demangled_names(*args):
@@ -50,7 +50,7 @@ def init_demangled_names(*args):
     """
     demangled_names.clear()
     for address, name in idautils.Names():
-        short_name = idc.Demangle(name, idc.GetLongPrm(idc.INF_SHORT_DN))
+        short_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN))
         if short_name:
             demangled_names[short_name.split('(')[0]] = address - idaapi.get_imagebase()
 
@@ -63,7 +63,7 @@ def init_demangled_names(*args):
             if adjustor:
                 demangled_names[name + "_adj_" + adjustor] = address - idaapi.get_imagebase()
 
-    print "[DEBUG] Demangled names have been initialized"
+    print "[DEBUG] demangled names have been initialized"
 
 
 def get_virtual_func_address(name, tinfo=None, offset=None):
@@ -74,7 +74,7 @@ def get_virtual_func_address(name, tinfo=None, offset=None):
     :return: address of the method
     """
 
-    address = idc.LocByName(name)
+    address = idc.get_name_ea_simple(name)
 
     if address != idaapi.BADADDR:
         return address

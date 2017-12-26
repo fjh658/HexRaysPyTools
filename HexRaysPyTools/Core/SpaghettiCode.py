@@ -21,29 +21,29 @@ class InversionInfo(object):
 
     def __init__(self, func_ea):
         self.__name = InversionInfo.ARRAY_NAME + hex(int(func_ea))
-        self.__id = idc.GetArrayId(self.__name)
+        self.__id = idc.get_array_id(self.__name)
 
     def get_inverted(self):
         if self.__id != -1:
-            array = idc.GetArrayElement(idc.AR_STR, self.__id, 0)
+            array = idc.get_array_element(idc.AR_STR, self.__id, 0)
             return set(map(int, array.split()))
         return set()
 
     def switch_inverted(self, address):
         if self.__id == -1:
-            self.__id = idc.CreateArray(self.__name)
-            idc.SetArrayString(self.__id, 0, str(address))
+            self.__id = idc.create_array(self.__name)
+            idc.set_array_string(self.__id, 0, str(address))
         else:
             inverted = self.get_inverted()
             try:
                 inverted.remove(address)
                 if not inverted:
-                    idc.DeleteArray(self.__id)
+                    idc.delete_array(self.__id)
 
             except KeyError:
                 inverted.add(address)
 
-            idc.SetArrayString(self.__id, 0, " ".join(map(str, inverted)))
+            idc.set_array_string(self.__id, 0, " ".join(map(str, inverted)))
 
 
 class SpaghettiVisitor(idaapi.ctree_parentee_t):

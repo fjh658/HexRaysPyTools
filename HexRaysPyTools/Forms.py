@@ -116,7 +116,7 @@ class StructureGraphViewer(idaapi.GraphViewer):
         self.graph = graph
         self.nodes_id = {}
 
-    def OnRefresh(self):
+    def Onrefresh(self):
         self.Clear()
         self.nodes_id.clear()
         for node in self.graph.get_nodes():
@@ -141,7 +141,7 @@ class StructureGraphViewer(idaapi.GraphViewer):
 
     def change_selected(self, ordinals):
         self.graph.change_selected(ordinals)
-        self.Refresh()
+        self.refresh()
         self.Select(self.nodes_id[ordinals[0]])
 
 
@@ -156,7 +156,7 @@ class ClassViewer(idaapi.PluginForm):
         self.action_expand = QtGui.QAction("Expand all", self.class_tree)
         self.action_set_arg = QtGui.QAction("Set First Argument Type", self.class_tree)
         self.action_rollback = QtGui.QAction("Rollback", self.class_tree)
-        self.action_refresh = QtGui.QAction("Refresh", self.class_tree)
+        self.action_refresh = QtGui.QAction("refresh", self.class_tree)
         self.action_commit = QtGui.QAction("Commit", self.class_tree)
 
         self.menu = QtGui.QMenu(self.parent)

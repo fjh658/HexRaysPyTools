@@ -367,13 +367,13 @@ class VirtualTable(AbstractMember):
             else:
                 segment = idaapi.getseg(func_address)
                 if segment and segment.perm & idaapi.SEGPERM_EXEC:
-                    idc.MakeUnknown(func_address, 1, idaapi.DOUNK_SIMPLE)
-                    if idc.MakeFunction(func_address):
+                    idc.del_items(func_address, 1, idaapi.DELIT_SIMPLE)
+                    if idc.add_func(func_address):
                         functions_count += 1
                         address += Const.EA_SIZE
                         continue
                 break
-            idaapi.autoWait()
+            idaapi.autowait()
         return functions_count
 
     @property
@@ -409,7 +409,7 @@ class Member(AbstractMember):
 
     def activate(self):
         new_type_declaration = idaapi.askstr(0x100, self.type_name, "Enter type:")
-        result = idc.ParseType(new_type_declaration, 0)
+        result = idc.parse_decl(new_type_declaration, 0)
         if result is None:
             return
         _, tp, fld = result
