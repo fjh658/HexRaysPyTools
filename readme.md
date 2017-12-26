@@ -1,3 +1,7 @@
+## Changelist:
+
+- Adapt ida7.0, only ida7.0
+
 # About
 
 Plugin assists in creation classes/structures and detection virtual tables. Also helps to transform decompiler output faster and allows to make some stuff otherwise impossible. Was introduced at ZeroNights 2016 ([slides][zeronights]).
@@ -63,26 +67,26 @@ Abbreviations:
 * PXWORD - DWORD * or QWORD *
 * PVOID - void *, PVOID
 
-| Variable type | Situation | Type | Offset |
-| --- | --- | --- | --- |
-| `XWORD` | `*(XWORD *) (var + x) = obj`| `typeof(obj) *` | `x` |
-| `XWORD` | `*(XWORD *) (var + x) = &obj`| `typeof(obj) *` | `x` |
-| `XWORD` | `*(TYPE *) (var + x)`| `TYPE` | `x` |
-| `XWORD` | `function(... , (LEGAL_TYPE) (var + x), ...)` | _BYTE[]_ and recursion started for this function and argument index | `x` |
-| `XWORD` | `function(... , (TYPE) (var + x), ...)`| argument's type | `x` |
-| `XWORD` | `function(... , var + x, ...)`| argument's type | `x` |
-| `XWORD *`, `PVOID` | `*var = obj` | `typeof(obj) *` | `0` |
-| `XWORD *`, `PVOID` | `*var = &obj` | `typeof(obj) *` | `0` |
-| `XWORD *`, `PVOID`| `*var = ???` | `XWORD` | `0` |
-| `XWORD *` | `var[idx] = obj` |` typeof(obj) * ` | `idx * sizeof(XWORD)` |
-| `XWORD *` | `var[idx] = &obj` |` typeof(obj) * ` | `idx * sizeof(XWORD)` |
-| `XWORD *` | `var[idx] = ???` |` XWORD ` | `idx * sizeof(XWORD)` |
-| `XWORD *`, `PVOID` | `*((TYPE *) var + x)`| `TYPE` | `x * sizeof(TYPE)` |
-| `XWORD *`, `PVOID` | `function(... , (LEGAL_TYPE) (var + x), ...)` | _BYTE[]_ and recursion started for this function and argument index | `x * sizeof(XWORD)` |
-| `XWORD *`, `PVOID` | `function(... , (TYPE) (var + x), ...)`| argument's type | `x * sizeof(XWORD)` |
-| `PVOID` | `function(... , (TYPE *)var + x, ...)`| argument's type | `x * sizeof(TYPE)` |
-| `PVOID` | `function(... , (TYPE)var + x, ...)`| argument's type | `x` |
-| `PVOID` | `(TYPE *) ((char *)var + x)`| TYPE | `x` |
+| Variable type      | Situation                                | Type                                     | Offset                |
+| ------------------ | ---------------------------------------- | ---------------------------------------- | --------------------- |
+| `XWORD`            | `*(XWORD *) (var + x) = obj`             | `typeof(obj) *`                          | `x`                   |
+| `XWORD`            | `*(XWORD *) (var + x) = &obj`            | `typeof(obj) *`                          | `x`                   |
+| `XWORD`            | `*(TYPE *) (var + x)`                    | `TYPE`                                   | `x`                   |
+| `XWORD`            | `function(... , (LEGAL_TYPE) (var + x), ...)` | _BYTE[]_ and recursion started for this function and argument index | `x`                   |
+| `XWORD`            | `function(... , (TYPE) (var + x), ...)`  | argument's type                          | `x`                   |
+| `XWORD`            | `function(... , var + x, ...)`           | argument's type                          | `x`                   |
+| `XWORD *`, `PVOID` | `*var = obj`                             | `typeof(obj) *`                          | `0`                   |
+| `XWORD *`, `PVOID` | `*var = &obj`                            | `typeof(obj) *`                          | `0`                   |
+| `XWORD *`, `PVOID` | `*var = ???`                             | `XWORD`                                  | `0`                   |
+| `XWORD *`          | `var[idx] = obj`                         | ` typeof(obj) * `                        | `idx * sizeof(XWORD)` |
+| `XWORD *`          | `var[idx] = &obj`                        | ` typeof(obj) * `                        | `idx * sizeof(XWORD)` |
+| `XWORD *`          | `var[idx] = ???`                         | ` XWORD `                                | `idx * sizeof(XWORD)` |
+| `XWORD *`, `PVOID` | `*((TYPE *) var + x)`                    | `TYPE`                                   | `x * sizeof(TYPE)`    |
+| `XWORD *`, `PVOID` | `function(... , (LEGAL_TYPE) (var + x), ...)` | _BYTE[]_ and recursion started for this function and argument index | `x * sizeof(XWORD)`   |
+| `XWORD *`, `PVOID` | `function(... , (TYPE) (var + x), ...)`  | argument's type                          | `x * sizeof(XWORD)`   |
+| `PVOID`            | `function(... , (TYPE *)var + x, ...)`   | argument's type                          | `x * sizeof(TYPE)`    |
+| `PVOID`            | `function(... , (TYPE)var + x, ...)`     | argument's type                          | `x`                   |
+| `PVOID`            | `(TYPE *) ((char *)var + x)`             | TYPE                                     | `x`                   |
 
 ### Classes (Alt + F1)
 
@@ -226,7 +230,7 @@ Usage:
 
 
 [0]: https://sourceforge.net/projects/classinformer/
-[1]: https://msdn.microsoft.com/en-us/library/windows/hardware/ff542043%28v=vs.85%29.aspx?f=255&MSPPError=-2147217396
+[1]: https://msdn.microsoft.com/en-us/library/windows/hardware/ff542043%28v=vs.85%29.aspx?f=255&amp;MSPPError=-2147217396
 [zeronights]: zeronights_2016.pptx
 [structure_graph]: Img/structure_builder.JPG
 [bad_structures]: Img/bad.JPG
