@@ -5,15 +5,27 @@ import re
 import itertools
 # import PySide.QtCore as QtCore
 # import PySide.QtGui as QtGui
-from HexRaysPyTools.Cute import *
-import Const
-import Helper
-import VariableScanner
-from HexRaysPyTools.Forms import MyChoose
+import cache
+from HexRaysPyTools.cute import *
+import const
+import helper
+import variable_scanner
+import HexRaysPyTools.api as api
+import common
+from HexRaysPyTools.forms import MyChoose
+
+
+SCORE_TABLE = dict((v, k) for k, v in enumerate(
+    ['unsigned __int8 *', 'unsigned __int8', '__int8 *', '__int8', '_BYTE', '_BYTE *', '_BYTE **', 'const char **',
+     'signed __int16', 'unsigned __int16', '__int16', 'signed __int16 *', 'unsigned __int16 *', '__int16 *',
+     '_WORD *', '_WORD **',
+     'signed int*', 'signed int', 'unsigned int *', 'unsigned int', 'int **', 'char **', 'int *', 'void **',
+     'int', '_DWORD *', 'char', '_DWORD', '_WORD', 'void *', 'char *']
+))
 
 
 def parse_vtable_name(address):
-    name = idaapi.get_short_name(address)
+    name = idaapi.get_name(address)
     if idaapi.is_valid_typename(name):
         if name[0:3] == 'off':
             # off_XXXXXXXX case
@@ -21,52 +33,10 @@ def parse_vtable_name(address):
         elif "table" in name:
             return name, True
         print "[Warning] Weird virtual table name -", name
-        return "Vtable_" + name
-    else:
-        # Attempt to make nice and valid name from demangled RTTI name
-        try:
-            name = re.sub("^const ", "", name)
-            sliced_names = name.split("::")
-            name, for_part = "_for_".join(sliced_names[:-1]), sliced_names[-1]
-            print name, for_part
-            templates = re.search("<(.*)>", name)
-            if templates:
-                templates = templates.group(1)
-                name = re.sub("<.*>", "", name)
-                templates = re.sub("[^a-zA-Z0-9_*]", "_", templates)
-                templates = re.sub("\*", "PTR", templates)
-                name += '_' + templates
-
-            for_part = re.search("\{for `(.*)'\}", for_part)
-            if for_part:
-                for_part = for_part.group(1)
-                name += '_' + for_part
-
-            return 'Vtable_' + name, True
-
-        except (AttributeError, IndexError):
-            print "[Warning] Unable to parse virtual table name - "
-
-        return "Vtable_{0:X}".format(address), False
-
-
-def create_member(function, expression_address, origin, offset, index, tinfo=None, ea=0, pvoid_applicable=False):
-    # Creates appropriate member (VTable, regular member, void *member) depending on input
-    if isinstance(index, str):
-        scanned_variable = ScannedVariable(function, None, expression_address, origin, False, index)
-    else:
-        scanned_variable = ScannedVariable(function, function.get_lvars()[index], expression_address, origin)
-    if ea:
-        if VirtualTable.check_address(ea):
-            return VirtualTable(offset, ea, scanned_variable, origin)
-    if tinfo and not tinfo.equals_to(Const.VOID_TINFO):
-        tinfo.clr_const()
-        return Member(offset, tinfo, scanned_variable, origin)
-    else:
-        # VoidMember shouldn't have ScannedVariable because after finalizing it can mess up with normal functions
-        # like `memset` or operator delete
-        scanned_variable.applicable = pvoid_applicable
-        return VoidMember(offset, scanned_variable, origin)
+        return "Vtable_" + name, False
+    name = idc.demangle_name(idaapi.get_name(address), idc.INF_SHORT_DN)
+    assert name, "Virtual table must have either legal c-type name or mangled name"
+    return common.demangled_name_to_c_str(name), True
 
 
 class AbstractMember:
@@ -100,6 +70,21 @@ class AbstractMember:
     def set_enabled(self, enable):
         self.enabled = enable
         self.is_array = False
+
+    def has_collision(self, other):
+        if self.offset <= other.offset:
+            return self.offset + self.size > other.offset
+        return other.offset + other.size >= self.offset
+
+    @property
+    def score(self):
+        """ More score of the member - it better suits as candidate for this offset """
+        try:
+            return SCORE_TABLE[self.type_name]
+        except KeyError:
+            if self.tinfo and self.tinfo.is_funcptr():
+                return 0x1000 + len(self.tinfo.dstr())
+            return 0xFFFF
 
     @property
     def type_name(self):
@@ -151,25 +136,19 @@ class VirtualFunction:
         udt_member.type = self.get_ptr_tinfo()
         udt_member.offset = self.offset
         udt_member.name = self.name
-        udt_member.size = Const.EA_SIZE
+        udt_member.size = const.EA_SIZE
         return udt_member
 
     def get_information(self):
-        return ["0x{0:08X}".format(self.address), self.name, self.tinfo.dstr()]
+        return [helper.to_hex(self.address), self.name, self.tinfo.dstr()]
 
     @property
     def name(self):
-        name = idaapi.get_short_name(self.address)
-        name = name.split('(')[0]
-        result = re.search(r"(\[thunk\]:)?([^`]*)(.*\{(\d+)}.*)?", name)
-        name, adjuster = result.group(2), result.group(4)
-        if adjuster:
-            name += "_adj_" + adjuster
-        name = name.translate(None, "`'").replace(':', '_').replace(' ', '_').replace(',', '_').replace('~', 'DESTR__')
-        name = name.replace("==", "__eq__")
-        name = name.replace("=", "__asg__")
-        name = re.sub(r'[<>]', '_t_', name)
-        return name
+        name = idaapi.get_name(self.address)
+        if idaapi.is_valid_typename(name):
+            return name
+        name = idc.Demangle(name, idc.INF_SHORT_DN)
+        return common.demangled_name_to_c_str(name)
 
     @property
     def tinfo(self):
@@ -177,11 +156,11 @@ class VirtualFunction:
             decompiled_function = idaapi.decompile(self.address)
             if decompiled_function:
                 return idaapi.tinfo_t(decompiled_function.type)
-            return Const.DUMMY_FUNC
+            return const.DUMMY_FUNC
         except idaapi.DecompilationFailure:
             pass
         print "[ERROR] Failed to decompile function at 0x{0:08X}".format(self.address)
-        return Const.DUMMY_FUNC
+        return const.DUMMY_FUNC
 
     def show_location(self):
         idaapi.open_pseudocode(self.address, 1)
@@ -197,13 +176,40 @@ class ImportedVirtualFunction(VirtualFunction):
         tinfo = idaapi.tinfo_t()
         if idaapi.guess_tinfo2(self.address, tinfo):
             return tinfo
-        return Const.DUMMY_FUNC
+        return const.DUMMY_FUNC
 
     def show_location(self):
         idaapi.jumpto(self.address)
 
 
 class VirtualTable(AbstractMember):
+    class VirtualTableChoose(MyChoose):
+        def __init__(self, items, temp_struct, virtual_table):
+            MyChoose.__init__(
+                self,
+                items,
+                "Select Virtual Function",
+                [["Address", 10], ["Name", 15], ["Declaration", 45]],
+                13
+            )
+            self.popup_names = ["Scan All", "-", "Scan", "-"]
+            self.__temp_struct = temp_struct
+            self.__virtual_table = virtual_table
+
+        def OnGetLineAttr(self, n):
+            return [0xd9d9d9, 0x0] if self.__virtual_table.virtual_functions[n].visited else [0xffffff, 0x0]
+
+        def OnGetIcon(self, n):
+            return 32 if self.__virtual_table.virtual_functions[n].visited else 160
+
+        def OnInsertLine(self):
+            """ Scan All Functions menu """
+            self.__virtual_table.scan_virtual_functions()
+
+        def OnEditLine(self, n):
+            """ Scan menu """
+            self.__virtual_table.scan_virtual_function(n)
+
     def __init__(self, offset, address, scanned_variable=None, origin=0):
         AbstractMember.__init__(self, offset + origin, scanned_variable, origin)
         self.address = address
@@ -215,18 +221,18 @@ class VirtualTable(AbstractMember):
     def populate(self):
         address = self.address
         while True:
-            if Const.EA64:
+            if const.EA64:
                 func_address = idaapi.get_64bit(address)
             else:
                 func_address = idaapi.get_32bit(address)
 
-            if Helper.is_code_ea(func_address):
+            if helper.is_code_ea(func_address):
                 self.virtual_functions.append(VirtualFunction(func_address, address - self.address))
-            elif Helper.is_imported_ea(func_address):
+            elif helper.is_imported_ea(func_address):
                 self.virtual_functions.append(ImportedVirtualFunction(func_address, address - self.address))
             else:
                 break
-            address += Const.EA_SIZE
+            address += const.EA_SIZE
 
             if idaapi.get_first_dref_to(address) != idaapi.BADADDR:
                 break
@@ -237,13 +243,13 @@ class VirtualTable(AbstractMember):
         for function in self.virtual_functions:
             udt_data.push_back(function.get_udt_member())
 
-        for duplicates in Helper.search_duplicate_fields(udt_data):
+        for duplicates in helper.search_duplicate_fields(udt_data):
             first_entry_idx = duplicates.pop(0)
             print "[Warning] Found duplicate virtual functions", udt_data[first_entry_idx].name
             for num, dup in enumerate(duplicates):
                 udt_data[dup].name = "duplicate_{0}_{1}".format(first_entry_idx, num + 1)
                 tinfo = idaapi.tinfo_t()
-                tinfo.create_ptr(Const.DUMMY_FUNC)
+                tinfo.create_ptr(const.DUMMY_FUNC)
                 udt_data[dup].type = tinfo
 
         final_tinfo = idaapi.tinfo_t()
@@ -282,21 +288,8 @@ class VirtualTable(AbstractMember):
             print "*" * 100
 
     def show_virtual_functions(self):
-        function_chooser = MyChoose(
-            [function.get_information() for function in self.virtual_functions],
-            "Select Virtual Function",
-            [["Address", 10], ["Name", 15], ["Declaration", 45]],
-            13
-        )
-        function_chooser.OnGetIcon = lambda n: 32 if self.virtual_functions[n].visited else 160
-        function_chooser.OnGetLineAttr = \
-            lambda n: [0xd9d9d9, 0x0] if self.virtual_functions[n].visited else [0xffffff, 0x0]
-
-        # Very nasty, but have no time to make nice QT window instead Ida Choose2 menu.
-        # This function creates menu "Scan All"
-        function_chooser.popup_names = ["Scan All", "-", "Scan", "-"]
-        function_chooser.OnInsertLine = self.scan_virtual_functions
-        function_chooser.OnEditLine = self.scan_virtual_function
+        function_chooser = self.VirtualTableChoose(
+            [function.get_information() for function in self.virtual_functions], cache.temporary_structure, self)
 
         idx = function_chooser.Show(True)
         if idx != -1:
@@ -305,7 +298,7 @@ class VirtualTable(AbstractMember):
             virtual_function.show_location()
 
     def scan_virtual_function(self, index):
-        if Helper.is_imported_ea(self.virtual_functions[index].address):
+        if helper.is_imported_ea(self.virtual_functions[index].address):
             print "[INFO] Ignoring import function at 0x{0:08X}".format(self.address)
             return
         try:
@@ -313,14 +306,14 @@ class VirtualTable(AbstractMember):
         except idaapi.DecompilationFailure:
             print "[ERROR] Failed to decompile function at 0x{0:08X}".format(self.address)
             return
-        if Helper.FunctionTouchVisitor(function).process():
+        if helper.FunctionTouchVisitor(function).process():
             function = idaapi.decompile(self.virtual_functions[index].address)
-        if function.arguments and function.arguments[0].is_arg_var and Helper.is_legal_type(function.arguments[0].tif):
+        if function.arguments and function.arguments[0].is_arg_var and helper.is_legal_type(function.arguments[0].tif):
             print "[Info] Scanning virtual function at 0x{0:08X}".format(function.entry_ea)
-            scanner = VariableScanner.DeepSearchVisitor(function, self.offset, 0)
-            scanner.apply_to(function.body, None)
-            for candidate in scanner.candidates:
-                Helper.temporary_structure.add_row(candidate)
+            # TODO: Remove usage `temporary_structure' as global
+            obj = api.VariableObject(function.get_lvars()[0], 0)
+            scanner = variable_scanner.NewDeepSearchVisitor(function, self.offset, obj, cache.temporary_structure)
+            scanner.process()
         else:
             print "[Warning] Bad type of first argument in virtual function at 0x{0:08X}".format(function.entry_ea)
 
@@ -337,7 +330,7 @@ class VirtualTable(AbstractMember):
             tmp_tinfo.create_ptr(tmp_tinfo)
             udt_member.type = tmp_tinfo
             udt_member.offset = self.offset - offset
-            udt_member.size = Const.EA_SIZE
+            udt_member.size = const.EA_SIZE
         return udt_member
 
     def type_equals_to(self, tinfo):
@@ -357,24 +350,31 @@ class VirtualTable(AbstractMember):
     def check_address(address):
         # Checks if given address contains virtual table. Returns True if more than 2 function pointers found
         # Also if table's addresses point to code in executable section, than tries to make functions at that addresses
+        if helper.is_code_ea(address):
+            return False
+
         functions_count = 0
         while True:
-            func_address = idaapi.get_64bit(address) if Const.EA64 else idaapi.get_32bit(address)
+            func_address = idaapi.get_64bit(address) if const.EA64 else idaapi.get_32bit(address)
             # print "[INFO] Address 0x{0:08X}".format(func_address)
-            if Helper.is_code_ea(func_address) or Helper.is_imported_ea(func_address):
+            if helper.is_code_ea(func_address) or helper.is_imported_ea(func_address):
                 functions_count += 1
-                address += Const.EA_SIZE
+                address += const.EA_SIZE
             else:
                 segment = idaapi.getseg(func_address)
                 if segment and segment.perm & idaapi.SEGPERM_EXEC:
-                    idc.del_items(func_address, 1, idaapi.DELIT_SIMPLE)
-                    if idc.add_func(func_address):
+                    idc.MakeUnknown(func_address, 1, idaapi.DOUNK_SIMPLE)
+                    if idc.MakeFunction(func_address):
                         functions_count += 1
-                        address += Const.EA_SIZE
+                        address += const.EA_SIZE
                         continue
                 break
-            idaapi.autowait()
+            idaapi.autoWait()
         return functions_count
+
+    @property
+    def score(self):
+        return 0x2000
 
     @property
     def type_name(self):
@@ -386,7 +386,7 @@ class VirtualTable(AbstractMember):
 
     @property
     def size(self):
-        return Const.EA_SIZE
+        return const.EA_SIZE
 
 
 class Member(AbstractMember):
@@ -409,7 +409,10 @@ class Member(AbstractMember):
 
     def activate(self):
         new_type_declaration = idaapi.askstr(0x100, self.type_name, "Enter type:")
-        result = idc.parse_decl(new_type_declaration, 0)
+        if new_type_declaration is None:
+            return
+
+        result = idc.ParseType(new_type_declaration, 0)
         if result is None:
             return
         _, tp, fld = result
@@ -420,8 +423,9 @@ class Member(AbstractMember):
 
 
 class VoidMember(Member):
-    def __init__(self, offset, scanned_variable, origin=0):
-        Member.__init__(self, offset, Const.BYTE_TINFO, scanned_variable, origin)
+    def __init__(self, offset, scanned_variable, origin=0, char=False):
+        tinfo = const.CHAR_TINFO if char else const.BYTE_TINFO
+        Member.__init__(self, offset, tinfo, scanned_variable, origin)
         self.is_array = True
 
     def type_equals_to(self, tinfo):
@@ -436,72 +440,6 @@ class VoidMember(Member):
     @property
     def font(self):
         return QtGui.QFont("Consolas", 10, italic=True)
-
-
-class ScannedVariable:
-    def __init__(self, function, variable, expression_address, origin, applicable=True, global_variable=None):
-        """
-        Class for storing variable and it's function that have been scanned previously.
-        Need to think whether it's better to store address and index, or cfunc_t and lvar_t
-
-        :param function: idaapi.cfunc_t
-        :param variable: idaapi.vdui_t
-        """
-        self.function = function
-        if global_variable is not None:
-            self.gvar = global_variable
-            self.lvar = None
-            self.applicable = False
-        else:
-            self.gvar = None
-            self.lvar = variable
-
-        self.expression_address = expression_address
-        self.origin = origin
-        self.applicable = applicable
-
-    @property
-    def name(self):
-        if self.gvar is not None:
-            return self.gvar
-        return self.lvar.name
-
-    @property
-    def function_name(self):
-        return idaapi.get_short_name(self.function.entry_ea)
-
-    def apply_type(self, tinfo):
-        """ Finally apply Class'es tinfo to this variable """
-
-        if self.applicable:
-            hx_view = idaapi.open_pseudocode(self.function.entry_ea, -1)
-            if hx_view:
-                print "[Info] Applying tinfo to variable {0} in function {1}".format(
-                    self.lvar.name,
-                    idaapi.get_short_name(self.function.entry_ea)
-                )
-                # Finding lvar of new window that have the same name that saved one and applying tinfo_t
-                lvar = filter(lambda x: x == self.lvar, hx_view.cfunc.get_lvars())
-                if lvar:
-                    print "+++++++++++"
-                    hx_view.set_lvar_type(lvar[0], tinfo)
-                else:
-                    print "-----------"
-
-    def to_list(self):
-        """ Creates list that is acceptable to MyChoose2 viewer """
-        return [
-            "0x{0:04X}".format(self.origin),
-            self.function_name,
-            self.name,
-            "0x{0:08X}".format(self.expression_address)
-        ]
-
-    def __eq__(self, other):
-        return self.function.entry_ea == other.function.entry_ea and self.lvar == other.lvar
-
-    def __hash__(self):
-        return hash((self.function.entry_ea, self.name))
 
 
 class TemporaryStructureModel(QtCore.QAbstractTableModel):
@@ -553,7 +491,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
         elif role == QtCore.Qt.FontRole:
             if col == 1:
                 return item.font
-        elif role == QtCore.Qt.BackgroundColorRole:
+        elif role == QtCore.Qt.BackgroundRole:
             if not item.enabled:
                 return QtGui.QColor(QtCore.Qt.gray)
             if item.offset == self.main_offset:
@@ -561,6 +499,9 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
                     return QtGui.QBrush(QtGui.QColor("#ff8080"))
             if self.have_collision(row):
                 return QtGui.QBrush(QtGui.QColor("#ffff99"))
+        elif role == QtCore.Qt.ForegroundRole:
+            if self.have_collision(row):
+                return QtGui.QBrush(QtGui.QColor("#191919"))
 
     def setData(self, index, value, role):
         row, col = index.row(), index.column()
@@ -588,7 +529,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
 
         final_tinfo = idaapi.tinfo_t()
         udt_data = idaapi.udt_type_data_t()
-        origin = self.items[start].offset
+        origin = self.items[start].offset if start else 0
         offset = origin
 
         for item in filter(lambda x: x.enabled, self.items[start:stop]):    # Filter disabled members
@@ -634,7 +575,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
                     tinfo = idaapi.create_typedef(structure_name)
                     ptr_tinfo = idaapi.tinfo_t()
                     ptr_tinfo.create_ptr(tinfo)
-                    for scanned_var in self.get_scanned_variables(origin):
+                    for scanned_var in self.get_unique_scanned_variables(origin):
                         scanned_var.apply_type(ptr_tinfo)
                     return tinfo
             else:
@@ -676,12 +617,10 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
             self.refresh_collisions()
             self.modelReset.emit()
 
-    def get_scanned_variables(self, origin=0):
-        return set(
-            itertools.chain.from_iterable(
-                [list(item.scanned_variables) for item in self.items if item.origin == origin]
-            )
-        )
+    def get_unique_scanned_variables(self, origin=0):
+        scan_objects = itertools.chain.from_iterable(
+            [list(item.scanned_variables) for item in self.items if item.origin == origin])
+        return dict(((item.function_name, item.name), item) for item in scan_objects).values()
 
     def get_next_enabled(self, row):
         row += 1
@@ -719,7 +658,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
                 for offset in offsets:
                     is_found = False
                     items = filter(lambda x: x.offset == offset, enabled_items)
-                    potential_members = Helper.get_fields_at_offset(tinfo, offset - base)
+                    potential_members = helper.get_fields_at_offset(tinfo, offset - base)
                     for item in items:
                         for potential_member in potential_members:
                             if item.type_equals_to(potential_member):
@@ -746,14 +685,14 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
         udt_member = idaapi.udt_member_t()
         if size == 1:
             udt_member.name = "gap_{0:X}".format(offset)
-            udt_member.type = Const.BYTE_TINFO
-            udt_member.size = Const.BYTE_TINFO.get_size()
+            udt_member.type = const.BYTE_TINFO
+            udt_member.size = const.BYTE_TINFO.get_size()
             udt_member.offset = offset
             return udt_member
 
         array_data = idaapi.array_type_data_t()
         array_data.base = 0
-        array_data.elem_type = Const.BYTE_TINFO
+        array_data.elem_type = const.BYTE_TINFO
         array_data.nelems = size
         tmp_tinfo = idaapi.tinfo_t()
         tmp_tinfo.create_array(array_data)
@@ -822,6 +761,33 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
                     member.name = udt_item.name
                     self.add_row(member)
 
+    def resolve_types(self):
+        current_item = None
+        current_item_score = 0
+
+        for item in self.items:
+            if not item.enabled:
+                continue
+
+            if current_item is None:
+                current_item = item
+                current_item_score = current_item.score
+                continue
+
+            item_score = item.score
+            if current_item.has_collision(item):
+                if item_score <= current_item_score:
+                    item.set_enabled(False)
+                    continue
+                elif item_score > current_item_score:
+                    current_item.set_enabled(False)
+
+            current_item = item
+            current_item_score = item_score
+
+        self.refresh_collisions()
+        self.modelReset.emit()
+
     def remove_items(self, indices):
         rows = map(lambda x: x.row(), indices)
         if rows:
@@ -842,7 +808,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
             tinfo = self.get_recognized_shape()
             if tinfo:
                 tinfo.create_ptr(tinfo)
-                for scanned_var in self.get_scanned_variables(origin=0):
+                for scanned_var in self.get_unique_scanned_variables(origin=0):
                     scanned_var.apply_type(tinfo)
                 self.clear()
         else:
@@ -853,7 +819,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
             if tinfo:
                 ptr_tinfo = idaapi.tinfo_t()
                 ptr_tinfo.create_ptr(tinfo)
-                for scanned_var in self.get_scanned_variables(base):
+                for scanned_var in self.get_unique_scanned_variables(base):
                     scanned_var.apply_type(ptr_tinfo)
                 self.items = filter(lambda x: x.offset < base or x.offset >= base + tinfo.get_size(), self.items)
                 self.add_row(Member(base, tinfo, None))

@@ -1,10 +1,10 @@
 import idc
 import idaapi
-import HexRaysPyTools.Forms
-import Helper
+import HexRaysPyTools.forms
+import helper
 
 # from PySide import QtGui, QtCore
-from HexRaysPyTools.Cute import *
+from HexRaysPyTools.cute import *
 
 all_virtual_functions = {}      # name    -> VirtualMethod
 all_virtual_tables = {}         # ordinal -> VirtualTable
@@ -18,9 +18,8 @@ class VirtualMethod(object):
         self.class_name = None
         self.name_modified = False
         self.parents = [parent]
-        self.base_address = Helper.get_virtual_func_address(name)
-        if self.base_address:
-            self.base_address -= idaapi.get_imagebase()
+        image_base = idaapi.get_imagebase()
+        self.ra_addresses = [ea - image_base for ea in helper.get_virtual_func_addresses(name)]
 
         self.rowcount = 0
         self.children = []
@@ -41,17 +40,17 @@ class VirtualMethod(object):
         self.name_modified = False
         self.tinfo_modified = False
 
-        self.base_address = idc.get_name_ea_simple(self.name)
-        if self.base_address != idaapi.BADADDR:
-            self.base_address -= idaapi.get_imagebase()
-
     def data(self, column):
         if column == 0:
             return self.name
         elif column == 1:
             return self.tinfo.get_pointed_object().dstr()
         elif column == 2:
-            return "0x{0:08X}".format(self.address) if self.address else None
+            addresses = self.addresses
+            if len(addresses) > 1:
+                return "LIST"
+            elif len(addresses) == 1:
+                return helper.to_hex(addresses[0])
 
     def setData(self, column, value):
         if column == 0:
@@ -66,7 +65,7 @@ class VirtualMethod(object):
             split = value.split('(')
             if len(split) == 2:
                 value = split[0] + ' ' + self.name + '(' + split[1] + ';'
-                if idaapi.parse_decl2(idaapi.cvar.idati, value, '', tinfo, idaapi.PT_TYP):
+                if idaapi.parse_decl(tinfo, idaapi.cvar.idati, value, idaapi.PT_TYP) is not None:
                     if tinfo.is_func():
                         tinfo.create_ptr(tinfo)
                         if tinfo.dstr() != self.tinfo.dstr():
@@ -86,7 +85,8 @@ class VirtualMethod(object):
 
     def flags(self, column):
         if column != 2:
-            if self.address:
+            if len(self.addresses) == 1:
+                # Virtual function has only one address. Allow to modify its signature and name
                 return QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsEditable
         return QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled
 
@@ -101,8 +101,9 @@ class VirtualMethod(object):
         return None
 
     @property
-    def address(self):
-        return self.base_address + idaapi.get_imagebase() if self.base_address else None
+    def addresses(self):
+        image_base = idaapi.get_imagebase()
+        return [ra + image_base for ra in self.ra_addresses]
 
     def set_first_argument_type(self, name):
         func_data = idaapi.func_type_data_t()
@@ -113,7 +114,7 @@ class VirtualMethod(object):
             class_tinfo.create_ptr(class_tinfo)
             first_arg_tinfo = func_data[0].type
             if (first_arg_tinfo.is_ptr() and first_arg_tinfo.get_pointed_object().is_udt()) or \
-                    Helper.is_legal_type(func_data[0].type):
+                    helper.is_legal_type(func_data[0].type):
                 func_data[0].type = class_tinfo
                 func_data[0].name = "this"
                 func_tinfo.create_func(func_data)
@@ -127,24 +128,34 @@ class VirtualMethod(object):
                 print "[Warning] function {0} probably have wrong type".format(self.name)
 
     def open_function(self):
-        if self.address:
-            if idaapi.decompile(self.address):
-                idaapi.open_pseudocode(self.address, 0)
-            else:
-                idaapi.jumpto(self.address)
+        addresses = self.addresses
+        if len(addresses) > 1:
+            address = helper.choose_virtual_func_address(self.name)
+            if not address:
+                return
+        elif len(addresses) == 1:
+            address = addresses[0]
+        else:
+            return
+
+        if helper.decompile_function(address):
+            idaapi.open_pseudocode(address, 0)
+        else:
+            idaapi.jumpto(address)
 
     def commit(self):
+        addresses = self.addresses
         if self.name_modified:
             self.name_modified = False
-            if self.address:
-                idaapi.set_name(self.address, self.name)
+            if len(addresses) == 1:
+                idaapi.set_name(addresses[0], self.name)
         if self.tinfo_modified:
             self.tinfo_modified = False
-            if self.address:
-                idaapi.apply_tinfo2(self.address, self.tinfo.get_pointed_object(), idaapi.TINFO_DEFINITE)
+            if len(addresses) == 1:
+                idaapi.apply_tinfo2(addresses[0], self.tinfo.get_pointed_object(), idaapi.TINFO_DEFINITE)
 
     def __eq__(self, other):
-        return self.address == other.address
+        return self.addresses == other.addresses
 
     def __repr__(self):
         return self.name
@@ -464,8 +475,10 @@ class TreeModel(QtCore.QAbstractItemModel):
             return index.internalPointer().item.font(index.column())
         elif role == QtCore.Qt.ToolTipRole:
             return index.internalPointer().item.tooltip
-        elif role == QtCore.Qt.BackgroundColorRole:
+        elif role == QtCore.Qt.BackgroundRole:
             return index.internalPointer().item.color
+        elif role == QtCore.Qt.ForegroundRole:
+            return QtGui.QBrush(QtGui.QColor("#191919"))
         return None
 
     def setData(self, index, value, role=QtCore.Qt.DisplayRole):
@@ -484,7 +497,7 @@ class TreeModel(QtCore.QAbstractItemModel):
         class_name = indexes[0].internalPointer().item.class_name
         if not class_name:
             classes = [[x.item.name] for x in self.tree_data]
-            class_chooser = HexRaysPyTools.Forms.MyChoose(classes, "Select Class", [["Name", 25]])
+            class_chooser = HexRaysPyTools.forms.MyChoose(classes, "Select Class", [["Name", 25]])
             idx = class_chooser.Show(True)
             if idx != -1:
                 class_name = classes[idx][0]

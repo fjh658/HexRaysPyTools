@@ -1,8 +1,7 @@
 import idaapi
 # import PySide.QtGui as QtGui
 # import PySide.QtCore as QtCore
-from HexRaysPyTools.Cute import *
-import Core.Classes
+from HexRaysPyTools.cute import *
 
 
 class MyChoose(idaapi.Choose2):
@@ -48,6 +47,7 @@ class StructureBuilder(idaapi.PluginForm):
         btn_pack = QtGui.QPushButton("&Pack")
         btn_unpack = QtGui.QPushButton("&Unpack")
         btn_remove = QtGui.QPushButton("&Remove")
+        btn_resolve = QtGui.QPushButton("Resolve")
         btn_clear = QtGui.QPushButton("Clear")  # Clear button doesn't have shortcut because it can fuck up all work
         btn_recognize = QtGui.QPushButton("Recognize Shape")
         btn_recognize.setStyleSheet("QPushButton {width: 100px; height: 20px;}")
@@ -81,6 +81,7 @@ class StructureBuilder(idaapi.PluginForm):
         grid_box.addWidget(btn_pack, 1, 1)
         grid_box.addWidget(btn_unpack, 1, 2)
         grid_box.addWidget(btn_remove, 1, 3)
+        grid_box.addWidget(btn_resolve, 0, 4)
         grid_box.addItem(QtGui.QSpacerItem(20, 20, QtGui.QSizePolicy.Expanding), 1, 5)
         grid_box.addWidget(btn_recognize, 0, 6)
         grid_box.addWidget(btn_clear, 1, 6)
@@ -98,6 +99,7 @@ class StructureBuilder(idaapi.PluginForm):
         btn_pack.clicked.connect(lambda: self.structure_model.pack_substructure(struct_view.selectedIndexes()))
         btn_unpack.clicked.connect(lambda: self.structure_model.unpack_substructure(struct_view.selectedIndexes()))
         btn_remove.clicked.connect(lambda: self.structure_model.remove_items(struct_view.selectedIndexes()))
+        btn_resolve.clicked.connect(lambda: self.structure_model.resolve_types())
         btn_clear.clicked.connect(lambda: self.structure_model.clear())
         btn_recognize.clicked.connect(lambda: self.structure_model.recognize_shape(struct_view.selectedIndexes()))
         struct_view.activated[QtCore.QModelIndex].connect(self.structure_model.activated)
@@ -116,7 +118,7 @@ class StructureGraphViewer(idaapi.GraphViewer):
         self.graph = graph
         self.nodes_id = {}
 
-    def Onrefresh(self):
+    def OnRefresh(self):
         self.Clear()
         self.nodes_id.clear()
         for node in self.graph.get_nodes():
@@ -141,12 +143,12 @@ class StructureGraphViewer(idaapi.GraphViewer):
 
     def change_selected(self, ordinals):
         self.graph.change_selected(ordinals)
-        self.refresh()
+        self.Refresh()
         self.Select(self.nodes_id[ordinals[0]])
 
 
 class ClassViewer(idaapi.PluginForm):
-    def __init__(self):
+    def __init__(self, proxy_model, class_model):
         super(ClassViewer, self).__init__()
         self.parent = None
         self.class_tree = QtGui.QTreeView()
@@ -156,12 +158,13 @@ class ClassViewer(idaapi.PluginForm):
         self.action_expand = QtGui.QAction("Expand all", self.class_tree)
         self.action_set_arg = QtGui.QAction("Set First Argument Type", self.class_tree)
         self.action_rollback = QtGui.QAction("Rollback", self.class_tree)
-        self.action_refresh = QtGui.QAction("refresh", self.class_tree)
+        self.action_refresh = QtGui.QAction("Refresh", self.class_tree)
         self.action_commit = QtGui.QAction("Commit", self.class_tree)
 
         self.menu = QtGui.QMenu(self.parent)
 
-        self.proxy_model = Core.Classes.ProxyModel()
+        self.proxy_model = proxy_model
+        self.class_model = class_model
 
     def OnCreate(self, form):
         # self.parent = self.FormToPySideWidget(form)
@@ -184,8 +187,7 @@ class ClassViewer(idaapi.PluginForm):
         hbox_layout.addWidget(label_filter)
         hbox_layout.addWidget(self.line_edit_filter)
 
-        class_model = Core.Classes.TreeModel()
-        self.proxy_model.setSourceModel(class_model)
+        self.proxy_model.setSourceModel(self.class_model)
         self.proxy_model.setFilterCaseSensitivity(QtCore.Qt.CaseInsensitive)
         self.class_tree.setModel(self.proxy_model)
         self.class_tree.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
@@ -197,14 +199,14 @@ class ClassViewer(idaapi.PluginForm):
         self.action_collapse.triggered.connect(self.class_tree.collapseAll)
         self.action_expand.triggered.connect(self.class_tree.expandAll)
         self.action_set_arg.triggered.connect(
-            lambda: class_model.set_first_argument_type(
+            lambda: self.class_model.set_first_argument_type(
                 map(self.proxy_model.mapToSource, self.class_tree.selectedIndexes())
             )
         )
-        self.action_rollback.triggered.connect(lambda: class_model.rollback())
-        self.action_refresh.triggered.connect(lambda: class_model.refresh())
-        self.action_commit.triggered.connect(lambda: class_model.commit())
-        class_model.refreshed.connect(self.class_tree.expandAll)
+        self.action_rollback.triggered.connect(lambda: self.class_model.rollback())
+        self.action_refresh.triggered.connect(lambda: self.class_model.refresh())
+        self.action_commit.triggered.connect(lambda: self.class_model.commit())
+        self.class_model.refreshed.connect(self.class_tree.expandAll)
 
         self.menu.addAction(self.action_collapse)
         self.menu.addAction(self.action_expand)
@@ -219,7 +221,7 @@ class ClassViewer(idaapi.PluginForm):
         self.parent.setLayout(vertical_box)
 
         self.class_tree.activated[QtCore.QModelIndex].connect(
-            lambda x: class_model.open_function(self.proxy_model.mapToSource(x))
+            lambda x: self.class_model.open_function(self.proxy_model.mapToSource(x))
         )
         self.class_tree.customContextMenuRequested[QtCore.QPoint].connect(self.show_menu)
         self.line_edit_filter.textChanged[str].connect(self.proxy_model.set_regexp_filter)
